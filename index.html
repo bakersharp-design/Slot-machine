@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="en" >
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Slot Machine with Smooth Animations & Paylines</title>
+  <style>
+    body, html {
+      margin: 0; padding: 0; height: 100%;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      user-select: none;
+      background: linear-gradient(135deg, #050505, #001a00);
+      color: #0f0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 30px;
+    }
+    h1 {
+      margin-bottom: 10px;
+      text-shadow: 0 0 10px #0f0;
+    }
+    #machine-container {
+      position: relative;
+      width: 420px;
+      height: 360px;
+      background: #002200;
+      border-radius: 20px;
+      box-shadow: 0 0 40px #0f0 inset;
+      padding: 15px 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      user-select: none;
+      overflow: hidden;
+    }
+    #slotGrid {
+      display: grid;
+      grid-template-columns: repeat(3, 120px);
+      grid-template-rows: repeat(3, 120px);
+      gap: 15px;
+      margin-bottom: 20px;
+      position: relative;
+      z-index: 2;
+      overflow: visible;
+    }
+    .reel {
+      position: relative;
+      width: 120px;
+      height: 360px; /* show 3 symbols vertically */
+      overflow: hidden;
+      border-radius: 15px;
+      box-shadow: 0 0 20px #0f0 inset;
+      background: #001100;
+    }
+    .symbols {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 120px;
+      user-select: none;
+    }
+    .symbol {
+      width: 120px;
+      height: 120px;
+      font-size: 70px;
+      color: #0f0;
+      text-align: center;
+      line-height: 120px;
+      font-weight: 900;
+      text-shadow: 0 0 10px #0f0;
+      border-bottom: 1px solid #003300;
+      box-sizing: border-box;
+    }
+    /* Highlight winning cells */
+    .highlight {
+      box-shadow: 0 0 30px 8px #ffff55 inset;
+      border: 2px solid #ffff55;
+    }
+
+    #paylineCanvas {
+      position: absolute;
+      top: 15px;
+      left: 20px;
+      width: 360px;
+      height: 360px;
+      pointer-events: none;
+      z-index: 1;
+    }
+
+    #controls {
+      width: 100%;
+      text-align: center;
+      margin-bottom: 20px;
+    }
+    #spinBtn {
+      padding: 15px 70px;
+      font-size: 24px;
+      font-weight: 700;
+      color: #002200;
+      background: #0f0;
+      border: none;
+      border-radius: 30px;
+      cursor: pointer;
+      box-shadow: 0 0 30px #0f0;
+      transition: background 0.3s ease;
+      user-select: none;
+    }
+    #spinBtn:disabled {
+      background: #033300;
+      cursor: not-allowed;
+      box-shadow: none;
+      color: #055505;
+    }
+    #bankroll, #message {
+      font-size: 20px;
+      font-weight: 700;
+      text-shadow: 0 0 8px #0f0;
+      margin-top: 10px;
+      user-select: none;
+    }
+    #history {
+      width: 380px;
+      max-height: 180px;
+      overflow-y: auto;
+      background: #003300;
+      border-radius: 15px;
+      padding: 10px;
+      box-shadow: 0 0 15px #0f0 inset;
+      font-size: 14px;
+      color: #afa;
+      font-family: monospace;
+      user-select: none;
+    }
+  </style>
+</head>
+<body>
+
+<h1>🍒 Slot Machine 🎰</h1>
+
+<div id="machine-container" role="main" aria-label="Slot machine with reels and paylines">
+
+  <canvas id="paylineCanvas" width="360" height="360" aria-hidden="true"></canvas>
+
+  <div id="slotGrid" aria-label="Slot reels grid" role="region" aria-live="polite">
+    <!-- reels go here -->
+  </div>
+
+</div>
+
+<div id="controls">
+  <button id="spinBtn" aria-label="Spin the slot machine">SPIN</button>
+  <div id="bankroll" aria-live="polite">Bankroll: $1000</div>
+  <div id="message" aria-live="polite"></div>
+</div>
+
+<div id="history" aria-label="Spin history" role="log" aria-live="polite"></div>
+
+<script>
+  const symbols = ['🍒', '🍋', '🍉', '⭐', '7️⃣', '🍇', '🔔', '🍀', '💎', '🍩', '🎲', '🍎'];
+  const paylines = [
+    [3,4,5], // middle row
+    [0,1,2], // top row
+    [6,7,8], // bottom row
+    [0,4,8], // diag top-left to bottom-right
+    [6,4,2]  // diag bottom-left to top-right
+  ];
+
+  const slotGrid = document.getElementById('slotGrid');
+  const bankrollEl = document.getElementById('bankroll');
+  const spinBtn = document.getElementById('spinBtn');
+  const messageEl = document.getElementById('message');
+  const historyEl = document.getElementById('history');
+  const paylineCanvas = document.getElementById('paylineCanvas');
+  const ctx = paylineCanvas.getContext('2d');
+
+  let bankroll = 1000;
+  let spinning = false;
+  let history = [];
+
+  // Create reels structure: 3 reels, each with 20+ symbols stacked vertically (for smooth spin)
+  const reelsCount = 3;
+  const reelHeight = 360;
+  const symbolHeight = 120;
+  const symbolsPerReel = 20; // enough for smooth loop
+
+  // Each reel is a div with many symbols stacked vertically (symbols repeat)
+  let reels = [];
+
+  for(let r=0; r<reelsCount; r++) {
+    const reelDiv = document.createElement('div');
+    reelDiv.classList.add('reel');
+    const symbolsDiv = document.createElement('div');
+    symbolsDiv.classList.add('symbols');
+    // Fill reel symbols repeating
+    for(let i=0; i<symbolsPerReel; i++) {
+      const symDiv = document.createElement('div');
+      symDiv.classList.add('symbol');
+      symDiv.textContent = symbols[i % symbols.length];
+      symbolsDiv.appendChild(symDiv);
+    }
+    reelDiv.appendChild(symbolsDiv);
+    slotGrid.appendChild(reelDiv);
+    reels.push({reelDiv, symbolsDiv, position: 0, stopIndex: 0});
+  }
+
+  function updateBankroll() {
+    bankrollEl.textContent = `Bankroll: $${bankroll}`;
+  }
+
+  function randInt(min,max) {
+    return Math.floor(Math.random()*(max-min+1))+min;
+  }
+
+  // Easing function for smooth deceleration
+  function easeOut(t) {
+    return 1 - Math.pow(1 - t, 3);
+  }
+
+  async function spin() {
+    if(spinning) return;
+    if(bankroll < 10) {
+      messageEl.textContent = "Not enough bankroll to spin ($10 minimum)";
+      return;
+    }
+    spinning = true;
+    spinBtn.disabled = true;
+    messageEl.textContent = "Spinning...";
+    bankroll -= 10;
+    updateBankroll();
+
+    // Decide final symbol indexes for each reel (the center symbol of reel will be the result)
+    for(let r=0; r<reelsCount; r++) {
+      reels[r].stopIndex = randInt(0, symbols.length - 1);
+    }
+
+    // Total spin duration and stop delays for reels
+    const totalSpinDuration = 3500; // ms
+    const reelStopDelays = [0, 600, 1200]; // each reel stops 600ms after previous
+
+    // Animation loop with requestAnimationFrame
+    const startTime = performance.now();
+
+    function animate(time) {
+      const elapsed = time - startTime;
+
+      for(let r=0; r<reelsCount; r++) {
+        let reel = reels[r];
+        let delay = reelStopDelays[r];
+        if(elapsed < delay) {
+          // Not started spinning yet - static position
+          reel.position = 0;
+        } else if(elapsed < totalSpinDuration + delay) {
+          // Spinning with easing deceleration
+          let spinTime = elapsed - delay;
+          let t = spinTime / totalSpinDuration;
+          let easeT = easeOut(t);
+          // Total spins (cycles)
+          const totalCycles = 10;
+          // Calculate offset (symbols per reel)
+          let offsetSymbols = (1 - easeT) * totalCycles * symbolsPerReel + reel.stopIndex;
+          reel.position = offsetSymbols % symbolsPerReel;
+        } else {
+          // Stopped
+          reel.position = reels[r].stopIndex;
+        }
+        // Apply transform
+        reel.symbolsDiv.style.top = (-reel.position * symbolHeight) + 'px';
+      }
+
+      // Continue anim if any reel still spinning
+      if(elapsed < totalSpinDuration + reelStopDelays[reelsCount-1]) {
+        requestAnimationFrame(animate);
+      } else {
+        // Spin finished - finalize results
+        finalizeSpin();
+      }
+    }
+
+    requestAnimationFrame(animate);
+  }
+
+  function finalizeSpin() {
+    // Determine the visible 3 symbols per reel (center, one above, one below)
+    // Since reel.position is the top symbol offset, we calculate center as position + 1 symbol
+    let grid = [];
+    for(let r=0; r<reelsCount; r++) {
+      let reel = reels[r];
+      let centerIndex = Math.round(reel.position) + 1; 
+      // Get 3 symbols: top, center, bottom
+      let topSymbol = symbols[(centerIndex - 1 + symbols.length) % symbols.length];
+      let centerSymbol = symbols[centerIndex % symbols.length];
+      let bottomSymbol = symbols[(centerIndex + 1) % symbols.length];
+      grid.push(topSymbol, centerSymbol, bottomSymbol);
+    }
+    // grid order: reel0 top, reel0 center, reel0 bottom, reel1 top, reel1 center...
+    // We want row-wise, so rearrange:
+    // row0: grid[0], grid[3], grid[6]
+    // row1: grid[1], grid[4], grid[7]
+    // row2: grid[2], grid[5], grid[8]
+    const finalGrid = [
+      grid[0], grid[3], grid[6],
+      grid[1], grid[4], grid[7],
+      grid[2], grid[5], grid[8]
+    ];
+
+    // Clear previous highlights
+    document.querySelectorAll('.symbol.highlight').forEach(el => el.classList.remove('highlight'));
+
+    // Highlight winning paylines & calculate wins
+    let winningLines = [];
+    let winAmount = 0;
+    const paylineWin = 50; // $ per winning line
+
+    paylines.forEach((line, idx) => {
+      const lineSymbols = line.map(i => finalGrid[i]);
+      // Check if all three match
+      if(lineSymbols[0] === lineSymbols[1] && lineSymbols[1] === lineSymbols[2]) {
+        winningLines.push(idx);
+        winAmount += paylineWin;
+        // Highlight symbols
+        line.forEach(cellIdx => {
+          // Find symbol DOM elements
+          let reelNum = cellIdx % 3;
+          let rowNum = Math.floor(cellIdx / 3);
+          let reel = reels[reelNum];
+          // Because each reel's visible symbols are symbolsDiv.children at centerIndex-1, centerIndex, centerIndex+1
+          let centerIndex = Math.round(reel.position) + 1;
+          // map row 0-> index centerIndex-1, row 1-> centerIndex, row2-> centerIndex+1
+          let symbolIdx = centerIndex - 1 + rowNum;
+          symbolIdx = (symbolIdx + symbols.length) % symbols.length;
+          reel.symbolsDiv.children[symbolIdx].classList.add('highlight');
+        });
+      }
+    });
+
+    bankroll += winAmount;
+    updateBankroll();
+
+    if(winAmount > 0) {
+      messageEl.textContent = `You won $${winAmount} on ${winningLines.length} line(s)! 🎉`;
+      runWinAnimation();
+    } else {
+      messageEl.textContent = "No win. Try again!";
+    }
+
+    addToHistory(finalGrid, winningLines, winAmount);
+    spinning = false;
+    spinBtn.disabled = false;
+
+    // Draw paylines highlights
+    drawPaylines(winningLines);
+  }
+
+  // Draw lines on canvas to show winning paylines
+  function drawPaylines(lines) {
+    ctx.clearRect(0, 0, paylineCanvas.width, paylineCanvas.height);
+    if(lines.length === 0) return;
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = 'yellow';
+    ctx.shadowColor = 'yellow';
+    ctx.shadowBlur = 15;
+    ctx.lineCap = 'round';
+
+    // Cell centers on canvas (grid is 3x3 120x120 cells)
+    const cellCenters = [];
+    for(let row=0; row<3; row++) {
+      for(let col=0; col<3; col++) {
+        cellCenters.push({
+          x: col * 120 + 60,
+          y: row * 120 + 60
+        });
+      }
+    }
+
+    lines.forEach(lineIdx => {
+      const line = paylines[lineIdx];
+      ctx.beginPath();
+      line.forEach((cellIdx, i) => {
+        const pt = cellCenters[cellIdx];
+        if(i === 0) ctx.moveTo(pt.x, pt.y);
+        else ctx.lineTo(pt.x, pt.y);
+      });
+      ctx.stroke();
+    });
+  }
+
+  // Win confetti animation using simple canvas confetti
+  function runWinAnimation() {
+    const confettiCount = 100;
+    const confettiColors = ['#ffff55', '#ffdd00', '#ffaa00', '#ffffaa'];
+    const canvas = document.createElement('canvas');
+    canvas.style.position = 'fixed';
+    canvas.style.top = '0';
+    canvas.style.left = '0';
+    canvas.style.pointerEvents = 'none';
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    document.body.appendChild(canvas);
+    const ctx = canvas.getContext('2d');
+
+    let confettiPieces = [];
+    for(let i=0; i<confettiCount; i++) {
+      confettiPieces.push({
+        x: Math.random()*canvas.width,
+        y: Math.random()*canvas.height - canvas.height,
+        size: Math.random()*8 + 4,
+        color: confettiColors[Math.floor(Math.random()*confettiColors.length)],
+        speed: Math.random()*3 + 2,
+        angle: Math.random()*2*Math.PI,
+        angularSpeed: (Math.random()-0.5)*0.1,
+        tilt: 0
+      });
+    }
+
+    function drawConfetti() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      confettiPieces.forEach(p => {
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        ctx.rotate(p.angle);
+        ctx.fillStyle = p.color;
+        ctx.fillRect(-p.size/2, -p.size/4, p.size, p.size/2);
+        ctx.restore();
+      });
+    }
+
+    function updateConfetti() {
+      confettiPieces.forEach(p => {
+        p.y += p.speed;
+        p.angle += p.angularSpeed;
+        if(p.y > canvas.height) {
+          p.y = Math.random()*-canvas.height;
+          p.x = Math.random()*canvas.width;
+        }
+      });
+    }
+
+    let frames = 0;
+    function animate() {
+      frames++;
+      updateConfetti();
+      drawConfetti();
+      if(frames < 300) {
+        requestAnimationFrame(animate);
+      } else {
+        document.body.removeChild(canvas);
+      }
+    }
+    animate();
+  }
+
+  // Add spin info to history panel
+  function addToHistory(grid, winningLines, winAmount) {
+    const spinSymbols = grid.join('');
+    const winLinesStr = winningLines.length > 0 ? winningLines.map(i => i+1).join(', ') : 'None';
+    const entry = `Spin: ${spinSymbols} | Win Lines: ${winLinesStr} | Won: $${winAmount}`;
+    history.unshift(entry);
+    if(history.length > 20) history.pop();
+    historyEl.textContent = history.join('\n');
+  }
+
+  updateBankroll();
+
+  spinBtn.addEventListener('click', spin);
+</script>
+
+</body>
+</html>
